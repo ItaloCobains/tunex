@@ -1,0 +1,13 @@
+[package]
+name = "tunex-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+tunex-common = { path = "../crates/tunex-common" }
+serde_json = "1.0"
+tower = "0.4"
+http = "1.0"
+futures-util = "0.3"
