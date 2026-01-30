@@ -97,7 +97,7 @@ async fn forward_to_local(local_addr: &str, request_bytes: &[u8]) -> Vec<u8> {
     let _ = stream.shutdown().await;
 
     let mut buf = Vec::new();
-    let mut tmp = [0u8; 8192];
+    let mut tmp = [0u8; 8192]; // 8KB buffer with 0 initial values
     loop {
         match stream.read(&mut tmp).await {
             Ok(0) => break,

@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Gateway",
+      "cargo": {
+        "args": ["build", "--bin", "tunex-gateway", "--package", "tunex-gateway"],
+        "filter": {
+          "name": "tunex-gateway",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Client",
+      "cargo": {
+        "args": ["build", "--bin", "tunex-client", "--package", "tunex-client"],
+        "filter": {
+          "name": "tunex-client",
+          "kind": "bin"
+        }
+      },
+      "args": ["--port", "3000", "--gateway", "ws://127.0.0.1:8080/ws", "--name", "mytunnel"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
