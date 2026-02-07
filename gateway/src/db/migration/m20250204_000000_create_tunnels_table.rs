@@ -1,52 +1,27 @@
-use sea_orm_migration::{prelude::*, schema::*};
+use tunex_query::Migration;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
+pub struct CreateTunnelsTable;
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .create_table(
-                Table::create()
-                    .table(Tunnels::Table)
-                    .if_not_exists()
-                    .col(pk_auto(Tunnels::Id))
-                    .col(integer(Tunnels::UserId).not_null())
-                    .col(string(Tunnels::Ip).not_null())
-                    .col(timestamp(Tunnels::CreatedAt))
-                    .col(timestamp(Tunnels::UpdatedAt))
-                    .foreign_key(
-                        ForeignKey::create()
-                            .name("fk_tunnels_user_id")
-                            .from(Tunnels::Table, Tunnels::UserId)
-                            .to(Users::Table, Users::Id)
-                            .on_delete(ForeignKeyAction::Cascade),
-                    )
-                    .to_owned(),
-            )
-            .await
+impl Migration for CreateTunnelsTable {
+    fn version(&self) -> i64 {
+        20250204_000000
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(Tunnels::Table).to_owned())
-            .await
+    fn name(&self) -> &str {
+        "create_tunnels_table"
     }
-}
 
-#[derive(DeriveIden)]
-enum Tunnels {
-    Table,
-    Id,
-    UserId,
-    Ip,
-    CreatedAt,
-    UpdatedAt,
-}
+    fn up_sql(&self) -> &str {
+        "CREATE TABLE IF NOT EXISTS tunnels (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            ip VARCHAR NOT NULL,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP
+        )"
+    }
 
-#[derive(DeriveIden)]
-enum Users {
-    Table,
-    Id,
+    fn down_sql(&self) -> &str {
+        "DROP TABLE IF EXISTS tunnels"
+    }
 }
