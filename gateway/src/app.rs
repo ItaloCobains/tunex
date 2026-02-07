@@ -15,7 +15,7 @@ use crate::registry::Registry;
 pub struct AppState {
     pub registry: Registry,
     pub port: u16,
-    pub db: sea_orm::DatabaseConnection,
+    pub db: tunex_query::Pool,
 }
 
 /// Build the Axum router with all routes and shared state.
