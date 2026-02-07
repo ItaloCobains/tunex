@@ -4,9 +4,9 @@
 //! - **app** – Application state and router assembly
 //! - **config** – Configuration from environment
 //! - **db** – Database (SeaORM entities, migrations, connection)
-//! - **registry** – In-memory tunnel registry
-//! - **api** – WebSocket and HTTP API handlers
-//! - **proxy** – Tunnel proxy (forward /tunnel/:name to client)
+//! - **registry** – Redis-backed tunnel registry (tunnel name -> client address)
+//! - **api** – HTTP API (POST /register)
+//! - **proxy** – Tunnel proxy (forward /tunnel/:name to client over TCP)
 
 pub mod api;
 pub mod app;

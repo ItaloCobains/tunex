@@ -1,4 +1,6 @@
-//! Tunnel proxy: forward /tunnel/:name/* to the client over WebSocket.
+//! Tunnel proxy: forward /tunnel/:name/* to the client over TCP.
+//! Looks up client address in Redis, opens TCP, sends request, returns response.
+//! One connection per request in MVP; helper is reusable for future keep-alive/pooling.
 
 use axum::{
     body::Body,
@@ -6,8 +8,15 @@ use axum::{
     http::{Request, Response, StatusCode},
 };
 use http::request::Parts;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
+use std::time::Duration;
 
 use crate::app::AppState;
+
+const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TCP_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Forward request to tunnel `name`; 404 if path is not /tunnel/:name/... or tunnel not found.
 pub async fn proxy_handler(
@@ -37,34 +46,69 @@ pub async fn proxy_handler(
     }
 
     let backend_path_owned = backend_path.to_string();
-    let Some(tunnel_tx) = state.registry.get(&name).await else {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from(format!("tunnel not found: {}", name)))
-            .unwrap();
-    };
 
-    let (parts, body) = req.into_parts();
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let req_bytes = build_http_request(&parts, &backend_path_owned, body).await;
-    if tunnel_tx.send((req_bytes, reply_tx)).await.is_err() {
-        return Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .body(Body::from("tunnel disconnected"))
-            .unwrap();
-    }
-
-    let response_bytes = match reply_rx.await {
-        Ok(b) => b,
-        Err(_) => {
+    let client_address = match state.registry.get(&name).await {
+        Ok(Some(addr)) => addr,
+        Ok(None) => {
             return Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("tunnel timeout or closed"))
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from(format!("tunnel not found: {}", name)))
+                .unwrap();
+        }
+        Err(e) => {
+            eprintln!("Redis get error: {}", e);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("registry error"))
                 .unwrap();
         }
     };
 
-    parse_http_response(response_bytes)
+    let (parts, body) = req.into_parts();
+    let req_bytes = build_http_request(&parts, &backend_path_owned, body).await;
+
+    match send_request_over_tcp(&client_address, &req_bytes).await {
+        Ok(response_bytes) => parse_http_response(response_bytes),
+        Err(e) => {
+            eprintln!("TCP to client {} failed: {}", client_address, e);
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::from(format!("tunnel disconnected: {}", e)))
+                .unwrap()
+        }
+    }
+}
+
+/// Send raw HTTP request over a new TCP connection to the client and return raw response bytes.
+/// One connection per call in MVP; can be reused with a connection pool for keep-alive later.
+pub async fn send_request_over_tcp(
+    client_address: &str,
+    request_bytes: &[u8],
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let stream = timeout(
+        TCP_CONNECT_TIMEOUT,
+        TcpStream::connect(client_address),
+    )
+    .await
+    .map_err(|_| "connect timeout")?
+    .map_err(|e| format!("connect failed: {}", e))?;
+
+    let mut stream = stream;
+    stream.write_all(request_bytes).await?;
+    let _ = stream.shutdown().await;
+
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    loop {
+        let n = timeout(TCP_READ_TIMEOUT, stream.read(&mut tmp)).await;
+        match n {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => buf.extend_from_slice(&tmp[..n]),
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => return Err("read timeout".into()),
+        }
+    }
+    Ok(buf)
 }
 
 async fn build_http_request(parts: &Parts, backend_path: &str, body: Body) -> Vec<u8> {

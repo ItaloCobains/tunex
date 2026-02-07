@@ -25,6 +25,22 @@ pub struct RegisterResponse {
     pub public_url: String,
 }
 
+/// HTTP POST /register body (gateway connects to client scenario).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRegisterRequest {
+    pub tunnel_name: String,
+    pub client_address: String,
+    /// Optional token for future auth; ignored in MVP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// HTTP POST /register response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRegisterResponse {
+    pub public_url: String,
+}
+
 /// Raw HTTP request bytes (method, path, headers, body) sent gateway -> client.
 pub type HttpRequestBytes = Vec<u8>;
 

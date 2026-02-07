@@ -1,37 +1,48 @@
-//! In-memory tunnel registry: name -> channel to forward requests.
+//! Redis-backed tunnel registry: tunnel name -> client address (host:port).
+//! Shared across gateway instances so any instance can resolve and connect to the client.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use redis::AsyncCommands;
 
-/// Handle to forward a request to a tunnel and receive the response via oneshot.
-pub type TunnelHandle = mpsc::Sender<(Vec<u8>, tokio::sync::oneshot::Sender<Vec<u8>>)>;
+const KEY_PREFIX: &str = "tunex:tunnel:";
+const DEFAULT_TTL_SECS: u64 = 60;
 
-/// In-memory registry of active tunnels by name.
+/// Redis-backed registry of active tunnels by name.
 #[derive(Clone)]
 pub struct Registry {
-    inner: Arc<RwLock<HashMap<String, TunnelHandle>>>,
+    redis: redis::aio::ConnectionManager,
+    ttl_secs: u64,
 }
 
 impl Registry {
-    pub fn new() -> Self {
+    pub fn new(redis: redis::aio::ConnectionManager, ttl_secs: Option<u64>) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            redis,
+            ttl_secs: ttl_secs.unwrap_or(DEFAULT_TTL_SECS),
         }
     }
 
-    pub async fn register(&self, name: String, handle: TunnelHandle) {
-        let mut guard = self.inner.write().await;
-        guard.insert(name, handle);
+    fn key(name: &str) -> String {
+        format!("{}{}", KEY_PREFIX, name)
     }
 
-    pub async fn unregister(&self, name: &str) {
-        let mut guard = self.inner.write().await;
-        guard.remove(name);
+    /// Register a tunnel: store client address in Redis with TTL.
+    pub async fn register(&self, name: String, address: String) -> Result<(), redis::RedisError> {
+        let key = Self::key(&name);
+        let mut conn = self.redis.clone();
+        conn.set_ex(key, address, self.ttl_secs).await
     }
 
-    pub async fn get(&self, name: &str) -> Option<TunnelHandle> {
-        let guard = self.inner.read().await;
-        guard.get(name).cloned()
+    /// Look up client address for a tunnel. Returns None if not found or expired.
+    pub async fn get(&self, name: &str) -> Result<Option<String>, redis::RedisError> {
+        let key = Self::key(name);
+        let mut conn = self.redis.clone();
+        conn.get(key).await
+    }
+
+    /// Remove a tunnel from the registry (optional; TTL will expire it if client disappears).
+    pub async fn unregister(&self, name: &str) -> Result<(), redis::RedisError> {
+        let key = Self::key(name);
+        let mut conn = self.redis.clone();
+        conn.del(key).await
     }
 }
