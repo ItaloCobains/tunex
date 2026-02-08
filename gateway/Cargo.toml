@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.7", features = ["json", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tunex-common = { path = "../crates/tunex-common" }
 serde_json = "1.0"
@@ -14,3 +14,4 @@ sea-orm = { version = "1.0", features = ["runtime-tokio", "sqlx-postgres", "macr
 sea-orm-migration = "1.0"
 async-trait = "0.1"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+rand = "0.8"

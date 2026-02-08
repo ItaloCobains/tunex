@@ -1,5 +1,7 @@
 //! Tunex Client Agent: listens for gateway TCP connections and forwards to local service.
-//! Registers with the gateway via HTTP POST; gateways discover client address from Redis.
+//! Registers with the gateway via HTTP POST; gateway assigns a subdomain and gateways discover client address from Redis.
+
+include!(concat!(env!("OUT_DIR"), "/gateway_url.rs"));
 
 use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,6 +10,8 @@ use tunex_common::{HttpRegisterRequest, HttpRegisterResponse};
 use std::time::Duration;
 
 const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+const DEFAULT_LISTEN_PORT: u16 = 9090;
+const LISTEN_PORT_MAX: u16 = 9120;
 
 #[derive(Parser, Debug)]
 #[command(name = "tunex-client")]
@@ -17,58 +21,57 @@ struct Args {
     #[arg(short, long, default_value = "3000")]
     port: u16,
 
-    /// Port to listen on for gateway connections (gateways connect here)
-    #[arg(short, long, default_value = "9090")]
-    listen: u16,
-
-    /// Address to advertise to the gateway (host:port gateways will connect to)
-    #[arg(long, default_value = "127.0.0.1:9090")]
-    advertise_address: String,
-
-    /// Gateway base URL for registration (e.g. http://localhost:8080)
-    #[arg(short, long, default_value = "http://127.0.0.1:8080")]
-    gateway: String,
-
-    /// Tunnel name (used in gateway path /tunnel/<name>/...)
-    #[arg(short, long, default_value = "default")]
-    name: String,
-
     /// Optional auth token for registration; ignored by gateway in MVP
     #[arg(long)]
     token: Option<String>,
+}
+
+async fn bind_listener() -> Result<TcpListener, std::io::Error> {
+    let mut port = DEFAULT_LISTEN_PORT;
+    loop {
+        let addr = format!("0.0.0.0:{}", port);
+        match TcpListener::bind(&addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(e) => {
+                if port >= LISTEN_PORT_MAX {
+                    return Err(e);
+                }
+                port += 1;
+            }
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
-    let listen_addr = format!("0.0.0.0:{}", args.listen);
-    let listener = TcpListener::bind(&listen_addr).await?;
-    println!("Listening for gateways on {}", listen_addr);
+    let listener = bind_listener().await?;
+    let listen_port = listener.local_addr()?.port();
+    println!("Listening for gateways on 0.0.0.0:{}", listen_port);
 
-    let gateway_url = args.gateway.trim_end_matches('/');
+    let advertise_address = format!("127.0.0.1:{}", listen_port);
+    let gateway_url = GATEWAY_URL.trim_end_matches('/');
     let register_url = format!("{}/register", gateway_url);
 
-    // Initial registration
-    if let Err(e) = do_register(&register_url, &args.name, &args.advertise_address, args.token.as_deref()).await {
-        eprintln!("Initial registration failed: {}", e);
-        return Err(e.into());
-    }
-    println!("Tunnel registered. Public URL: {}/tunnel/{}", gateway_url, args.name);
+    // Initial registration: no tunnel_id; gateway generates subdomain
+    let response = do_register(&register_url, &advertise_address, args.token.as_deref(), None).await?;
+    println!("Public URL: {}", response.public_url);
 
     let local_addr = format!("127.0.0.1:{}", args.port);
-    println!("Forwarding to {} (tunnel: {})", local_addr, args.name);
+    println!("Forwarding to {}", local_addr);
 
-    // Heartbeat task: re-register before TTL expires
+    let tunnel_id = response.tunnel_id.clone();
+
+    // Heartbeat task: re-register with same tunnel_id to refresh TTL
     let heartbeat_url = register_url.clone();
-    let heartbeat_name = args.name.clone();
-    let heartbeat_address = args.advertise_address.clone();
+    let heartbeat_address = advertise_address.clone();
     let heartbeat_token = args.token.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
         loop {
             interval.tick().await;
-            if do_register(&heartbeat_url, &heartbeat_name, &heartbeat_address, heartbeat_token.as_deref()).await.is_err() {
+            if do_register(&heartbeat_url, &heartbeat_address, heartbeat_token.as_deref(), Some(&tunnel_id)).await.is_err() {
                 eprintln!("Heartbeat registration failed");
             }
         }
@@ -94,13 +97,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 async fn do_register(
     url: &str,
-    tunnel_name: &str,
     client_address: &str,
     token: Option<&str>,
+    tunnel_id: Option<&str>,
 ) -> Result<HttpRegisterResponse, Box<dyn std::error::Error + Send + Sync>> {
     let body = HttpRegisterRequest {
-        tunnel_name: tunnel_name.to_string(),
         client_address: client_address.to_string(),
+        tunnel_id: tunnel_id.map(String::from),
         token: token.map(String::from),
     };
     let client = reqwest::Client::builder()

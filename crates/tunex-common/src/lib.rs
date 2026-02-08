@@ -26,10 +26,13 @@ pub struct RegisterResponse {
 }
 
 /// HTTP POST /register body (gateway connects to client scenario).
+/// When tunnel_id is None, gateway generates a new subdomain; when Some (heartbeat), gateway refreshes that tunnel's TTL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRegisterRequest {
-    pub tunnel_name: String,
     pub client_address: String,
+    /// Present on heartbeat to refresh the same tunnel; absent on first register (gateway generates subdomain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tunnel_id: Option<String>,
     /// Optional token for future auth; ignored in MVP.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -39,6 +42,8 @@ pub struct HttpRegisterRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRegisterResponse {
     pub public_url: String,
+    /// Subdomain (tunnel id) generated or refreshed; client sends this back on heartbeat.
+    pub tunnel_id: String,
 }
 
 /// Raw HTTP request bytes (method, path, headers, body) sent gateway -> client.
