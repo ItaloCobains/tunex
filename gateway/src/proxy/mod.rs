@@ -1,6 +1,5 @@
-//! Tunnel proxy: forward /tunnel/:name/* to the client over TCP.
-//! Looks up client address in Redis, opens TCP, sends request, returns response.
-//! One connection per request in MVP; helper is reusable for future keep-alive/pooling.
+//! Tunnel proxy: route by Host header (subdomain); forward full path to the client over TCP.
+//! Looks up client address in Redis by tunnel id (subdomain), opens TCP, sends request, returns response.
 
 use axum::{
     body::Body,
@@ -18,41 +17,45 @@ use crate::app::AppState;
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TCP_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Forward request to tunnel `name`; 404 if path is not /tunnel/:name/... or tunnel not found.
+/// Extract tunnel id (subdomain) from Host header. Host may include port (e.g. subdomain.localhost:8080).
+fn tunnel_id_from_host(host: Option<&str>, base_domain: &str) -> Option<String> {
+    let host = host?.trim();
+    let hostname = host.split(':').next().unwrap_or(host);
+    if hostname.is_empty() || hostname == base_domain {
+        return None;
+    }
+    let suffix = format!(".{}", base_domain);
+    if hostname.ends_with(&suffix) {
+        let sub = hostname.strip_suffix(&suffix).unwrap_or("");
+        if !sub.is_empty() {
+            return Some(sub.to_string());
+        }
+    }
+    None
+}
+
+/// Forward request to tunnel identified by Host subdomain; 404 if missing subdomain or tunnel not found.
 pub async fn proxy_handler(
     State(state): State<AppState>,
     req: Request<Body>,
 ) -> Response<Body> {
-    let path = req.uri().path();
-    let (name, backend_path) = match path.strip_prefix("/tunnel/") {
-        Some(rest) => {
-            let mut segments = rest.splitn(2, '/');
-            let name = segments.next().unwrap_or("").to_string();
-            let backend_path = segments.next().unwrap_or("");
-            (name, backend_path)
-        }
+    let host = req.headers().get(http::header::HOST).and_then(|v| v.to_str().ok());
+    let tunnel_id = match tunnel_id_from_host(host, &state.base_domain) {
+        Some(id) => id,
         None => {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from("use /tunnel/<name>/... to reach a tunnel"))
+                .body(Body::from("missing subdomain (use <tunnel_id>.<base_domain>)"))
                 .unwrap();
         }
     };
-    if name.is_empty() {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("missing tunnel name"))
-            .unwrap();
-    }
 
-    let backend_path_owned = backend_path.to_string();
-
-    let client_address = match state.registry.get(&name).await {
+    let client_address = match state.registry.get(&tunnel_id).await {
         Ok(Some(addr)) => addr,
         Ok(None) => {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .body(Body::from(format!("tunnel not found: {}", name)))
+                .body(Body::from(format!("tunnel not found: {}", tunnel_id)))
                 .unwrap();
         }
         Err(e) => {
@@ -65,7 +68,12 @@ pub async fn proxy_handler(
     };
 
     let (parts, body) = req.into_parts();
-    let req_bytes = build_http_request(&parts, &backend_path_owned, body).await;
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let req_bytes = build_http_request(&parts, &path_and_query, body).await;
 
     match send_request_over_tcp(&client_address, &req_bytes).await {
         Ok(response_bytes) => parse_http_response(response_bytes),
@@ -111,22 +119,15 @@ pub async fn send_request_over_tcp(
     Ok(buf)
 }
 
-async fn build_http_request(parts: &Parts, backend_path: &str, body: Body) -> Vec<u8> {
+async fn build_http_request(parts: &Parts, path_and_query: &str, body: Body) -> Vec<u8> {
     let method = parts.method.as_str();
-    let uri = &parts.uri;
-    let path: String = if backend_path.is_empty() {
-        "/".into()
-    } else if backend_path.starts_with('/') {
-        backend_path.into()
+    let path = if path_and_query.is_empty() || !path_and_query.starts_with('/') {
+        "/"
     } else {
-        format!("/{}", backend_path)
-    };
-    let path_and_query = match uri.query() {
-        Some(q) => format!("{}?{}", path, q),
-        None => path,
+        path_and_query
     };
 
-    let mut buf = format!("{} {} HTTP/1.1\r\n", method, path_and_query);
+    let mut buf = format!("{} {} HTTP/1.1\r\n", method, path);
     for (k, v) in parts.headers.iter() {
         if k.as_str().eq_ignore_ascii_case("transfer-encoding") {
             continue;

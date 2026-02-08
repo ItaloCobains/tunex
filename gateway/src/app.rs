@@ -16,6 +16,8 @@ pub struct AppState {
     pub registry: Registry,
     pub redis: redis::aio::ConnectionManager,
     pub port: u16,
+    pub base_domain: String,
+    pub public_scheme: String,
     pub db: sea_orm::DatabaseConnection,
 }
 
@@ -39,6 +41,8 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         registry: Registry::new(redis.clone(), Some(config.tunnel_ttl_secs)),
         redis,
         port: config.port,
+        base_domain: config.base_domain,
+        public_scheme: config.public_scheme,
         db,
     };
 
