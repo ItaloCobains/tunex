@@ -14,6 +14,7 @@ use crate::registry::Registry;
 #[derive(Clone)]
 pub struct AppState {
     pub registry: Registry,
+    pub redis: redis::aio::ConnectionManager,
     pub port: u16,
     pub db: tunex_query::Pool,
 }
@@ -21,17 +22,25 @@ pub struct AppState {
 /// Build the Axum router with all routes and shared state.
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/ws", axum::routing::get(api::ws_handler))
+        .route("/register", axum::routing::post(api::register_handler))
         .fallback(proxy::proxy_handler)
         .with_state(state)
 }
 
-/// Run the gateway: connect DB, run migrations, bind and serve.
+/// Run the gateway: connect DB, run migrations, Redis, bind and serve.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = db::connect_and_migrate(&config.database_url).await?;
+    let redis_client = redis::Client::open(config.redis_url.as_str())
+        .map_err(|e| format!("Redis client: {}", e))?;
+    let redis = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .map_err(|e| format!("Redis connection: {}", e))?;
     let state = AppState {
-        registry: Registry::new(),
+        registry: Registry::new(redis.clone(), Some(config.tunnel_ttl_secs)),
+        redis,
         port: config.port,
+        base_domain: config.base_domain,
+        public_scheme: config.public_scheme,
         db,
     };
 
