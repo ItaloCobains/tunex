@@ -1,0 +1,9 @@
+[package]
+  name = "tunex-query"
+  version = "0.1.0"
+  edition = "2021"
+
+[dependencies]
+  sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+  chrono = { version = "0.4", features = ["serde"] }
+  thiserror = "2"

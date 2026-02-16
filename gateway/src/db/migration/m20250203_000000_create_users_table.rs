@@ -1,39 +1,27 @@
-use sea_orm_migration::{prelude::*, schema::*};
+use tunex_query::Migration;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
+pub struct CreateUsersTable;
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .create_table(
-                Table::create()
-                    .table(Users::Table)
-                    .if_not_exists()
-                    .col(pk_auto(Users::Id))
-                    .col(string(Users::Name).not_null())
-                    .col(string(Users::Email).unique_key().not_null())
-                    .col(string(Users::Password).not_null())
-                    .col(timestamp(Users::CreatedAt))
-                    .to_owned(),
-            )
-            .await
+impl Migration for CreateUsersTable {
+    fn version(&self) -> i64 {
+        20250203_000000
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(Users::Table).to_owned())
-            .await
+    fn name(&self) -> &str {
+        "create_users_table"
     }
-}
 
-#[derive(DeriveIden)]
-enum Users {
-    Table,
-    Id,
-    Name,
-    Email,
-    Password,
-    CreatedAt,
+    fn up_sql(&self) -> &str {
+        "CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            email VARCHAR NOT NULL UNIQUE,
+            password VARCHAR NOT NULL,
+            created_at TIMESTAMP
+        )"
+    }
+
+    fn down_sql(&self) -> &str {
+        "DROP TABLE IF EXISTS users"
+    }
 }

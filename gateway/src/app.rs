@@ -16,9 +16,7 @@ pub struct AppState {
     pub registry: Registry,
     pub redis: redis::aio::ConnectionManager,
     pub port: u16,
-    pub base_domain: String,
-    pub public_scheme: String,
-    pub db: sea_orm::DatabaseConnection,
+    pub db: tunex_query::Pool,
 }
 
 /// Build the Axum router with all routes and shared state.
